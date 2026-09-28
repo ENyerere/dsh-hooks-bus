@@ -134,3 +134,20 @@ export async function apply(ctx: Context): Promise<void> {
 - `turn-stats.ts` — 回合统计：TurnEnd 计数与 token 汇总
 
 运行方式：任意 DSH 插件中 `import { registerDangerGuard } from 'dsh-hooks-bus/docs-examples'` 不可用（示例未发布），请直接复制文件内容到你的插件。
+
+## 8. 客户端开发须知（设置页 / dsh.client）
+
+写带设置页的插件时，以下三条都是踩过坑换来的（P7 M2 期间实测）：
+
+1. **`inject` 必须声明用到的每个服务**：客户端模块用 `ctx.slots` 就要在模块返回里写 `inject: ['slots', 'locale']`；少声明一个，宿主注入的就是 undefined，报错信息还不指向真因。
+2. **注册 webServer 路由要等服务就绪**：在 `ctx.inject(['webServer'], () => { ... })` 回调里注册 API 路由，否则宿主启动顺序靠后时路由 404。
+3. **设置页注册不要挂 `immediately`**：设置页按官方做法懒加载（参考官方配套包 `@deepseek-ai/dsh-client-ui-settings-plugin-inventory`）；所有可见文本走 locale 服务（`ctx.locale.register` + `ctx.locale.bind`），注册项带 `locale` 命名空间。
+
+另外两个容易踩的：
+
+- 客户端 JS 没有 TS 编译覆盖，加一个 `node --check client/client.js` 的脚本报错兜底（本仓库的 `check:client` 可直接照抄）；
+- 标题栏的开关要绑定"启用"语义（ON = 运行），别绑定内部状态字段（如 `paused`）——绑定反了用户会以为插件没开。
+
+## 9. 运行时实测行为
+
+设计订阅逻辑前必读 [observed-behavior.md](observed-behavior.md)：快速路径不记录无订阅者的事件、web 下 Error 双发须去重、headless 根会话无 SessionEnd、TurnStart 首回合无 model 等 8 条实测前提。

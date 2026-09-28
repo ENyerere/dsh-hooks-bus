@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Hooks Bus",
+    "description": "Managed subscriptions over DSH lifecycle events: versioned catalog, priorities, timeouts, error isolation, and dispatch logs."
+  }
+}

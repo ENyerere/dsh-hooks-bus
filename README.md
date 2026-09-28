@@ -64,6 +64,8 @@ export function apply(ctx: Context): void {
 - `danger-command-guard.ts` — 危险命令拦截（`rm -rf`、`format`、`del /s`、`git push --force` 等）
 - `turn-stats.ts` — 回合统计（计数与 token 汇总）
 
+**独立的消费者参考实现**：[dsh-hook-guard-demo](https://github.com/ENyerere/dsh-hook-guard-demo)——完全独立的包，演示 peer 依赖 + 声明式清单订阅的完整姿势（同时也是一个真能用的危险命令守卫）。
+
 ## 设置页
 
 Settings → Plugins → Hooks Bus：

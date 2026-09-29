@@ -38,3 +38,12 @@
 ## H. `patchReload: "live"` 是失效配置键
 
 DSH 没有 reload 命令，该配置键全盘无实现。profile 改动（装/卸插件）必须**重启宿主**才生效。
+
+## I. Loader 启动后 ≈1.4 s 会对整棵插件树做一次完整重挂载（P0 M0 实测）
+
+启动后约 1.4 秒，Loader 会把 `AgentLoop`/`SessionStore`/`AgentRegistry`/`HooksBusService` 等**每个 fiber 重建一遍**。后果：
+
+- 首次挂载期捕获的服务对象会**变陈旧**（陈旧对象上的方法可能报 `no agent factory registered` 之类错误，尽管服务键仍"存在"）；
+- `ctx.timer`/`ctx.effect` 绑定调用方 fiber，fiber inactive 后抛 `cannot create effect on inactive context`——**定时器不能在会被重建的 fiber 上 arm**（第一方 `dsh-schedule` 因此用裸 `setTimeout` + `unref()`）；
+- 长期存活的状态（订阅、注册表、通道）必须在每次挂载后重新生效（用 `ctx.effect` 绑生命周期），或延迟到重挂载稳定后再初始化；
+- 正面例证：第一方 `dsh-headless` 声明真实 `inject` 依赖并在 `await loader.await()` 之后建会话，可以稳定跑完整回合。

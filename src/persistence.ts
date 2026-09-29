@@ -13,7 +13,10 @@ import { z } from 'zod'
 
 import type { DispatchLogRecord, SubscriberOutcome } from './logger.ts'
 
-export const DOMAIN_NAME = 'dsh-hooks-bus'
+// The storage hub requires unit names to match /^[a-z][a-z0-9_]*$/.
+// Hyphens are rejected by dsh-storage-json's validateDescriptor (verified against the installed runtime).
+// Do not "fix" this back to the package name.
+export const DOMAIN_NAME = 'dsh_hooks_bus'
 
 const subscriberSchema = z.object({
   subscriptionId: z.number(),

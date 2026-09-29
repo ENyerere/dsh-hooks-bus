@@ -37,7 +37,7 @@ class FakeTable {
 }
 
 class FakeDomain {
-  readonly name = 'dsh-hooks-bus'
+  readonly name = 'dsh_hooks_bus'
   private pausedValue = { paused: false }
   private readonly tables = new Map<string, FakeTable>()
 
@@ -172,5 +172,13 @@ describe('persistence', () => {
     expect(harness.hooksBus.logs()).toHaveLength(3)
     expect(facility.domain.table('logs').size).toBe(3)
     await harness.dispose()
+  })
+
+  it('uses a domain name the real storage hub accepts', async () => {
+    // The runtime's dsh-storage-json rejects unit names outside /^[a-z][a-z0-9_]*$/.
+    // A hyphenated name fails to open in the real host and silently degrades to memory mode.
+    // This is exactly the bug dsh-scheduler hit in M2.
+    const { DOMAIN_NAME } = await import('#src/persistence')
+    expect(DOMAIN_NAME).toMatch(/^[a-z][a-z0-9_]*$/)
   })
 })

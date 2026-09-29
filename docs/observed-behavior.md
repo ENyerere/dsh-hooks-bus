@@ -47,3 +47,15 @@ DSH 没有 reload 命令，该配置键全盘无实现。profile 改动（装/�
 - `ctx.timer`/`ctx.effect` 绑定调用方 fiber，fiber inactive 后抛 `cannot create effect on inactive context`——**定时器不能在会被重建的 fiber 上 arm**（第一方 `dsh-schedule` 因此用裸 `setTimeout` + `unref()`）；
 - 长期存活的状态（订阅、注册表、通道）必须在每次挂载后重新生效（用 `ctx.effect` 绑生命周期），或延迟到重挂载稳定后再初始化；
 - 正面例证：第一方 `dsh-headless` 声明真实 `inject` 依赖并在 `await loader.await()` 之后建会话，可以稳定跑完整回合。
+
+## J. storageDomain 的命名规则只在真实宿主生效（P0 M2 实测）
+
+存储中枢（`dsh-storage-json` 的 `validateDescriptor`，已对照装机源码核实）强制两条规则：
+
+- **域名/表名**必须匹配 `/^[a-z][a-z0-9_]*$/`——**连字符非法**（`invalid unit name 'dsh-scheduler'`）。别跟着包名起域名；
+- **per-record 布局的键**就是文件名，必须匹配 `/^[a-zA-Z0-9_-]+$/`——NUL、路径分隔符等一律拒绝（`per-record key … is not path-safe`）。
+
+两条配套教训：
+
+1. **"存储打不开就降级内存"会把致命配置错误伪装成正常运行**：写入"成功"、读取永远为空、零异常日志。dsh-scheduler M1 的"持久化已验证"就是这样成为假验证的；dsh-hooks-bus 自己的域名也曾犯同款错误（v0.2.1 修复）。设计原则：**"没有存储服务"和"存储打不开"是两件不同的事**——前者可降级，后者必须响亮地失败（宁可不工作，不假装工作）。
+2. **桩（stub）存储测试永远碰不到真实后端的校验规则**：自写 MemoryDomain 不做命名/键校验。凡是依赖真实后端规则的代码，必须加"断言常量匹配真实规则"的防回归测试，并在真实宿主里至少验证一次。

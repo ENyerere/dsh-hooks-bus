@@ -74,7 +74,7 @@ Settings → Plugins → Hooks Bus：
 - **订阅者**：按来源（runtime / declarative）与 label 展示，可单独停用/启用
 - **执行日志**：按事件 / 订阅者 ID 过滤，显示各订阅者结果与合并决策
 - **全局暂停**：一键直通（零开销）；日志默认只存 payload 摘要（200 字符，`logFullPayload` 可开启全文）
-- **持久化（v0.2.0）**：执行日志与全局暂停写入插件自己的 storage 域（`storageDomain`，域名 `dsh-hooks-bus`），Host 重启后恢复；存储服务缺失时自动降级为内存模式
+- **持久化（v0.2.1）**：执行日志与全局暂停写入插件自己的 storage 域（`storageDomain`，域名 `dsh_hooks_bus`——存储中枢要求域名匹配 `/^[a-z][a-z0-9_]*$/`，连字符非法），Host 重启后恢复；存储服务缺失时自动降级为内存模式
 
 ## 开发
 

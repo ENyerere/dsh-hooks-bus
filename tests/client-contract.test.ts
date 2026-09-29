@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
+
 import { describe, expect, it } from 'vitest'
 
 interface ClientModule {
@@ -52,7 +53,10 @@ function loadClientModule(): ClientModule {
       },
     },
   }
-  const source = readFileSync(new URL('../client/client.js', import.meta.url), 'utf8')
+  const source = readFileSync(
+    new URL('../client/client.js', import.meta.url),
+    'utf8',
+  )
   runInNewContext(source, { window: windowStub })
   if (loaded === undefined) {
     throw new Error('client module did not load')
@@ -136,7 +140,10 @@ describe('client module contract', () => {
     // Binding it to `state.paused` directly once made a running bus render as OFF — pin the inversion.
     // Note: source-level check, because the stateful branch is unreachable with the stubbed React hooks.
     loadClientModule()
-    const source = readFileSync(new URL('../client/client.js', import.meta.url), 'utf8')
+    const source = readFileSync(
+      new URL('../client/client.js', import.meta.url),
+      'utf8',
+    )
     expect(source).toMatch(/checked:\s*!state\.paused/)
     expect(source).not.toMatch(/checked:\s*state\.paused/)
   })

@@ -70,7 +70,9 @@ export class PersistenceStore {
     ctx: Context,
     capacity: number,
   ): Promise<PersistenceStore | undefined> {
-    const lookup = ctx as Context & { get: (name: string, strict?: boolean) => unknown }
+    const lookup = ctx as Context & {
+      get: (name: string, strict?: boolean) => unknown
+    }
     const facility = lookup.get('storageDomain', false) as
       | StorageDomainLike
       | undefined

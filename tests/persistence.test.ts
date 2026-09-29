@@ -80,10 +80,9 @@ async function mountWithStorage(
 ): Promise<Harness> {
   const ctx = new Context()
   if (facility !== undefined) {
-    ;(ctx as unknown as { provide: (key: string, value: unknown) => unknown }).provide(
-      'storageDomain',
-      facility,
-    )
+    ;(
+      ctx as unknown as { provide: (key: string, value: unknown) => unknown }
+    ).provide('storageDomain', facility)
   }
   const fiber = await ctx.plugin(plugin, config)
   await flush()

@@ -132,10 +132,9 @@ describe('client module contract', () => {
   })
 
   it('binds the master switch as "enabled" (ON = running, OFF = paused)', () => {
-    // The page header shows "running" next to the switch, so the switch must
-    // read as an enable toggle. Binding it to state.paused directly once made
-    // a running bus render as OFF — pin the inversion. (Source-level check:
-    // the stateful branch is unreachable with the stubbed React hooks.)
+    // The page header shows "running" next to the switch, so the switch reads as an enable toggle.
+    // Binding it to `state.paused` directly once made a running bus render as OFF — pin the inversion.
+    // Note: source-level check, because the stateful branch is unreachable with the stubbed React hooks.
     loadClientModule()
     const source = readFileSync(new URL('../client/client.js', import.meta.url), 'utf8')
     expect(source).toMatch(/checked:\s*!state\.paused/)

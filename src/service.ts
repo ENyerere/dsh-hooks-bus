@@ -45,7 +45,8 @@ import type { Config, ResolvedConfig } from './config.ts'
 import { Dispatcher } from './dispatcher.ts'
 import { DispatchLogger } from './logger.ts'
 import type { DispatchLogRecord, EventStats } from './logger.ts'
-import { PersistenceStore } from './persistence.ts'
+import type { SubscriptionOwner } from './owner.ts'
+import { PersistenceLifecycle } from './persistence-lifecycle.ts'
 import { Registry } from './registry.ts'
 import type { DeclarativeSubscription, SubscribeOptions } from './registry.ts'
 
@@ -56,6 +57,14 @@ export interface DeclarativeEntry {
   priority?: number
   timeoutMs?: number
   label?: string
+  /** Self-reported provenance shown for troubleshooting; never verified. */
+  owner?: SubscriptionOwner
+  /** Optional key scoped to one event inside this declare() batch. */
+  key?: string
+  /** Keys in this batch that must run after this entry. */
+  before?: readonly string[]
+  /** Keys in this batch that must run before this entry. */
+  after?: readonly string[]
 }
 
 async function resolveDeclarativeEntry(
@@ -86,6 +95,10 @@ async function resolveDeclarativeEntry(
     ...(entry.priority === undefined ? {} : { priority: entry.priority }),
     ...(entry.timeoutMs === undefined ? {} : { timeoutMs: entry.timeoutMs }),
     ...(entry.label === undefined ? {} : { label: entry.label }),
+    ...(entry.owner === undefined ? {} : { owner: entry.owner }),
+    ...(entry.key === undefined ? {} : { key: entry.key }),
+    ...(entry.before === undefined ? {} : { before: entry.before }),
+    ...(entry.after === undefined ? {} : { after: entry.after }),
   }
 }
 
@@ -120,7 +133,7 @@ class HooksBusService extends Service<Config> {
   private readonly callStarts = new Map<string, number>()
   private readonly turnBuffers = new Map<string, TurnBuffer>()
   private readonly sessionStats = new Map<string, SessionStats>()
-  private persistence: PersistenceStore | undefined
+  private readonly persistence: PersistenceLifecycle
 
   constructor(ctx: Context, config: Config) {
     super(ctx, 'hooksBus')
@@ -133,12 +146,7 @@ class HooksBusService extends Service<Config> {
       resolved.logFullPayload,
       resolved.payloadSummaryMaxChars,
       (record) => {
-        const store = this.persistence
-        if (store !== undefined) {
-          void store.append(record).catch((error: unknown) => {
-            this.ctx.logger.warn('[hooks-bus] log persist failed: %s', error)
-          })
-        }
+        this.persistence.append(record)
       },
     )
     this.dispatcher = new Dispatcher(
@@ -164,21 +172,19 @@ class HooksBusService extends Service<Config> {
     ctx.inject(['webServer'], (webCtx) => {
       registerApi(webCtx, this)
     })
-    void this.initPersistence()
-  }
-
-  private async initPersistence(): Promise<void> {
-    const store = await PersistenceStore.open(this.ctx, this.config.logCapacity)
-    if (store === undefined) {
-      return
-    }
-    this.persistence = store
-    const paused = store.paused()
-    this.dispatcher.setPaused(paused)
-    this.logger.seed(store.logs())
-    if (paused) {
-      this.ctx.logger.info('[hooks-bus] restored global pause from storage')
-    }
+    // Persistence waits for storageDomain via a synchronously registered inject.
+    this.persistence = new PersistenceLifecycle(this.ctx, {
+      capacity: resolved.logCapacity,
+      seedLogs: (stored): void => {
+        this.logger.seed(stored)
+      },
+      logs: (): readonly DispatchLogRecord[] => this.logger.list(),
+      paused: (): boolean => this.dispatcher.paused,
+      applyPaused: (paused): void => {
+        this.dispatcher.setPaused(paused)
+      },
+    })
+    this.persistence.start()
   }
 
   /** Subscribe a runtime handler. Returns the disposer. */
@@ -224,12 +230,7 @@ class HooksBusService extends Service<Config> {
 
   setPaused(paused: boolean): void {
     this.dispatcher.setPaused(paused)
-    const store = this.persistence
-    if (store !== undefined) {
-      void store.setPaused(paused).catch((error: unknown) => {
-        this.ctx.logger.warn('[hooks-bus] pause persist failed: %s', error)
-      })
-    }
+    this.persistence.setPaused(paused)
   }
 
   setSubscriptionPaused(id: number, paused: boolean): boolean {
@@ -242,6 +243,7 @@ class HooksBusService extends Service<Config> {
     return {
       paused: this.dispatcher.paused,
       catalogVersion: CATALOG_VERSION,
+      persistence: this.persistence.info(),
       config: { ...this.config },
       events: (Object.keys(CATALOG) as CatalogEventName[]).map((name) => ({
         name,
@@ -259,6 +261,7 @@ class HooksBusService extends Service<Config> {
         source: subscription.source,
         label: subscription.label,
         paused: subscription.paused,
+        owner: subscription.owner ?? {},
       })),
       logs: this.logger.list(),
     }

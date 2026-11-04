@@ -115,6 +115,21 @@ describe('client module contract', () => {
     expect(registrations).toHaveLength(1)
   })
 
+  it('localizes the self-reported owner vocabulary', () => {
+    const module = loadClientModule()
+    const { dictionary } = applyWith(module)
+    const en = (dictionary as { en: Record<string, string> }).en
+    const zh = (dictionary as { zh: Record<string, string> }).zh
+    expect(en.subscribersTrustNote).toContain('self-reported')
+    expect(en.colPackage).toContain('self-reported')
+    expect(zh.subscribersTrustNote).toContain('自报')
+    expect(zh.colPackage).toContain('自报')
+    expect({ enUnknown: en.unknown, zhUnknown: zh.unknown }).toStrictEqual({
+      enUnknown: 'unknown',
+      zhUnknown: '未知',
+    })
+  })
+
   it('registers the tab entry with the official options shape and renders', () => {
     const module = loadClientModule()
     const { registrations } = applyWith(module)
@@ -146,5 +161,54 @@ describe('client module contract', () => {
     )
     expect(source).toMatch(/checked:\s*!state\.paused/)
     expect(source).not.toMatch(/checked:\s*state\.paused/)
+  })
+
+  it('renders the persistence state returned by the state API', () => {
+    // The stateful branch cannot run under the stubbed hooks, so pin the
+    // Contract at source level: the page must read state.persistence and show
+    // An error summary rather than silently implying durable storage.
+    const source = readFileSync(
+      new URL('../client/client.js', import.meta.url),
+      'utf8',
+    )
+    expect(source).toMatch(/state\.persistence/)
+    expect(source).toMatch(/persistenceStatusText/)
+    expect(source).toMatch(/persistence\.error/)
+  })
+
+  it('renders self-reported owner fields with unknown and external fallbacks', () => {
+    const source = readFileSync(
+      new URL('../client/client.js', import.meta.url),
+      'utf8',
+    )
+    expect(source).toMatch(/entry\.owner\?\.packageName/)
+    expect(source).toMatch(/entry\.owner\?\.packageVersion/)
+    expect(source).toMatch(/handlerRefLabel\(entry\.owner\)/)
+    expect(source).toMatch(/t\('unknown'\)/)
+    expect(source).toMatch(/t\('externalHandlerRef'\)/)
+  })
+
+  it('labels provenance as self-reported and never claims verification', () => {
+    const source = readFileSync(
+      new URL('../client/client.js', import.meta.url),
+      'utf8',
+    )
+    expect(source).toMatch(/t\('subscribersTrustNote'\)/)
+    expect(source).not.toMatch(/Trusted|Verified/)
+  })
+
+  it('keeps wide tables readable with in-card horizontal scrolling', () => {
+    const source = readFileSync(
+      new URL('../client/client.js', import.meta.url),
+      'utf8',
+    )
+    expect(source).toMatch(/tableScroll:\s*\{[^}]*overflowX:\s*'auto'/s)
+    expect(source).toMatch(
+      /naturalWidthTable:\s*\{[^}]*width:\s*'max-content'/s,
+    )
+    expect(source.match(/style:\s*css\.tableScroll/g)).toHaveLength(3)
+    expect(
+      source.match(/\.\.\.css\.table,\s*\.\.\.css\.naturalWidthTable/g),
+    ).toHaveLength(3)
   })
 })

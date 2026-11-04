@@ -59,3 +59,48 @@ DSH 没有 reload 命令，该配置键全盘无实现。profile 改动（装/�
 
 1. **"存储打不开就降级内存"会把致命配置错误伪装成正常运行**：写入"成功"、读取永远为空、零异常日志。dsh-scheduler M1 的"持久化已验证"就是这样成为假验证的；dsh-hooks-bus 自己的域名也曾犯同款错误（v0.2.1 修复）。设计原则：**"没有存储服务"和"存储打不开"是两件不同的事**——前者可降级，后者必须响亮地失败（宁可不工作，不假装工作）。
 2. **桩（stub）存储测试永远碰不到真实后端的校验规则**：自写 MemoryDomain 不做命名/键校验。凡是依赖真实后端规则的代码，必须加"断言常量匹配真实规则"的防回归测试，并在真实宿主里至少验证一次。
+
+## K. storageDomain 启动竞态与修复（P7 M1 实测）
+
+### 现象
+
+DSH `0.2.1-rc.5` 下，总线构造时 `ctx.get('storageDomain', false)` 返回 `undefined`；旧实现只查询一次并永久降级内存。之后同一宿主中存储服务正常可用，但日志/暂停始终没有落盘。
+
+### 修复
+
+- 在 `HooksBusService` 同步构造阶段注册 `ctx.inject(['storageDomain'], ...)`，服务出现后 open；
+- 公开 `state().persistence`：`mode` 为 memory/persistent，`status` 为 `unavailable` / `initializing` / `ready` / `error`；
+- open 失败进入 `error` 并记录错误摘要，不伪装持久化成功；
+- 服务移除且没有替代时，在 Loader 稳定后回到 `memory/unavailable`；
+- 用运行代号和 child-fiber/父 fiber 双失效标记避免陈旧 open 提交，迟到的 domain 立即关闭；
+- open 前产生的内存日志合并去重、排序并写回存储；暂停竞态以本地最新操作为准。
+
+### 验证级别
+
+| 级别 | 证据 |
+|---|---|
+| 单元测试 | `tests/persistence.test.ts`：晚到服务、无服务、open 失败、暂停竞态、dispose、服务替换、日志合并、失败摘要清除 |
+| 真实 Cordis 挂载 | 同一套 Registry/Dispatcher/Service 在生产代码路径上驱动官方 `tools/pre-execute` waterfall |
+| 真实宿主进程 | 隔离 `DSH_HOME` 下两次进程：write PID 与 verify PID 均正常退出；构造时 storage 不可见，约 55 ms 后 `persistent/ready`；12 条日志、暂停状态跨 PID 恢复；`dsh_hooks_bus` 下 `logs/*.json` 与 `global.json` 实际存在 |
+
+真实宿主探针不调用模型、不执行工具，结束后无遗留进程。这里不能把单测通过写成“真实宿主已通过”。
+
+## L. 订阅来源是消费者自报（P7 M2 结论）
+
+- `on()` / `declare()` 的 `owner` 全由消费者提供；总线**不读取调用栈**猜测包名，也不验证包身份；UI 使用“声明包（自报）”措辞。
+- `handlerRef` 规范化为包内 POSIX 相对路径；绝对路径、盘符、URL、逃出包外的 `..` 统一显示为 `external`，原始路径不进入 API/日志/UI。
+- 旧消费者不传 owner 仍工作，状态里 `owner: {}`，UI 显示 unknown。
+- 真实 `dsh-hook-guard-demo` 宿主验证中，`state().subscriptions` 可见：
+  `packageName=dsh-hook-guard-demo`、`packageVersion=0.1.0`、`handlerRef=hooks/danger-guard.js`；
+  该信息仍只是自报排障信息，不是宿主验证。
+- 证据分层：M2 探针是真实宿主（隔离 `DSH_HOME`），单元测试覆盖规范化/不泄露/旧消费者；设置页视觉渲染仍是人工项。
+
+## M. before/after 只是批次内顺序（P7 M3 结论）
+
+- 作用域严格限定为**同一次 `declare()`、同一事件**；不是跨包/跨事件/全局 DAG，也不会等待未来注册的 key。
+- 无 before/after 的旧批次保持 priority 降序 + 声明顺序；运行时 `on()` 完全不受影响。
+- 稳定拓扑排序的 tie-break 为 priority 降序、声明顺序升序；DAG 约束与 priority 冲突时 DAG 获胜。
+- keyless 条目可以通过 before/after 约束 keyed 条目；环检测遍历全部节点和边，keyless 节点参与环时同样报错，错误路径中显示为 `#index`。
+- 暂停某个节点不会破坏其余节点的传递顺序；拓扑计算包含暂停节点，最后才过滤。
+- 验证级别：F3 全部用例由真实 Cordis 挂载 + 真实 `tools/pre-execute` waterfall 的单测覆盖；**没有新增 M3 专属真实宿主进程探针**。因此这里是“真实 Cordis 挂载验证”，不是完整桌面宿主进程验证。
+- M1/M2 的真实宿主探针在 M3 后继续通过，用于防持久化和真消费者回归；它们不证明 DAG 在真实仪表盘中的视觉呈现。

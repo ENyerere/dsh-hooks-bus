@@ -46,6 +46,13 @@ export type {
   SubscriberStatus,
 } from './logger.ts'
 export type {
+  PersistenceInfo,
+  PersistenceMode,
+  PersistenceStatus,
+} from './persistence.ts'
+export { EXTERNAL_HANDLER_REF } from './owner.ts'
+export type { SubscriptionOwner } from './owner.ts'
+export type {
   DeclarativeSubscription,
   SubscribeOptions,
   Subscription,

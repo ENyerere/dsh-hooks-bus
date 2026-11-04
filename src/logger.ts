@@ -92,17 +92,27 @@ export class DispatchLogger {
     this.counters.set(event, current)
   }
 
-  /** Rebuild the ring from persisted records (after a host restart). */
+  /**
+   * Merge persisted records into the ring (after a host restart or after the
+   * storage service appears late).
+   *
+   * Records dispatched while the domain was still opening are already in
+   * memory. They must survive the merge without overwriting — or being
+   * overwritten by — stored history that uses the same sequence numbers (both
+   * processes number from 1). Identical stored/memory records are deduplicated;
+   * the unseen in-memory suffix is appended after the stored maximum whenever
+   * the two ranges overlap, so the merged view stays ordered and lossless.
+   */
   seed(stored: readonly DispatchLogRecord[]): void {
-    for (const record of stored) {
-      this.records.push(record)
-      if (this.nextSeq <= record.seq) {
-        this.nextSeq = record.seq + 1
-      }
-    }
-    while (this.records.length > this.capacity) {
-      this.records.shift()
-    }
+    const merged = mergeDispatchLogs(
+      stored,
+      this.records,
+      this.capacity,
+      this.nextSeq,
+    )
+    this.records.length = 0
+    this.records.push(...merged.records)
+    this.nextSeq = merged.nextSeq
   }
 
   list(): readonly DispatchLogRecord[] {
@@ -148,6 +158,95 @@ function sessionIdOf(payload: unknown): string | undefined {
   }
   const value = (payload as { sessionId?: unknown }).sessionId
   return typeof value === 'string' ? value : undefined
+}
+
+/**
+ * Merge stored and just-dispatched records for the ring.
+ *
+ * @param stored - Records read from the persisted domain.
+ * @param current - Records already in the in-memory ring.
+ * @param capacity - Ring capacity after merging.
+ * @param nextSeq - Next sequence the in-memory logger would have used.
+ * @returns The bounded, seq-sorted merged records and the next free sequence.
+ */
+export function mergeDispatchLogs(
+  stored: readonly DispatchLogRecord[],
+  current: readonly DispatchLogRecord[],
+  capacity: number,
+  nextSeq: number,
+): { records: DispatchLogRecord[]; nextSeq: number } {
+  const storedBySeq = new Map<number, DispatchLogRecord>()
+  for (const record of stored) {
+    storedBySeq.set(record.seq, record)
+  }
+  const merged = [...storedBySeq.values()].sort(
+    (left, right) => left.seq - right.seq,
+  )
+  const unseen: DispatchLogRecord[] = []
+  for (const record of current) {
+    const storedRecord = storedBySeq.get(record.seq)
+    if (storedRecord !== undefined && sameLogRecord(storedRecord, record)) {
+      // Already persisted by an earlier descriptor of the same memory instance.
+      continue
+    }
+    unseen.push(record)
+  }
+  // The persisted history is older than memory, so append the pre-open suffix
+  // After the stored max whenever the ranges overlap; this preserves the
+  // In-memory order instead of interleaving two independent sequences.
+  const storedMax = merged.at(-1)?.seq ?? 0
+  if (unseen.some((record) => record.seq <= storedMax)) {
+    let highWater = storedMax
+    for (const record of unseen) {
+      highWater += 1
+      merged.push({ ...record, seq: highWater })
+    }
+  } else {
+    merged.push(...unseen)
+  }
+  merged.sort((left, right) => left.seq - right.seq)
+  const bounded =
+    merged.length > capacity ? merged.slice(merged.length - capacity) : merged
+  return {
+    records: bounded,
+    nextSeq: Math.max(nextSeq, (bounded.at(-1)?.seq ?? 0) + 1),
+  }
+}
+
+function sameLogRecord(
+  left: DispatchLogRecord,
+  right: DispatchLogRecord,
+): boolean {
+  return (
+    left.seq === right.seq
+    && left.time === right.time
+    && left.event === right.event
+    && left.sessionId === right.sessionId
+    && left.durationMs === right.durationMs
+    && left.decision === right.decision
+    && left.payloadSummary === right.payloadSummary
+    && sameSubscribers(left.subscribers, right.subscribers)
+  )
+}
+
+function sameSubscribers(
+  left: readonly SubscriberOutcome[],
+  right: readonly SubscriberOutcome[],
+): boolean {
+  if (left.length !== right.length) {
+    return false
+  }
+  return left.every((entry, index) => {
+    const other = right[index]
+    return (
+      other !== undefined
+      && entry.subscriptionId === other.subscriptionId
+      && entry.status === other.status
+      && entry.durationMs === other.durationMs
+      && entry.decision === other.decision
+      && entry.summary === other.summary
+    )
+  })
 }
 
 export function truncate(text: string, max: number): string {

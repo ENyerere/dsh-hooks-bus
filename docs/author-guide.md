@@ -2,6 +2,7 @@
 
 > 目标：**没读过《P7 任务书》的开发者，10 分钟内写出第一个订阅插件。**
 > 读完本页 + 复制示例代码即可开工。
+> 包版本 0.3.0；已验证基线 DeepSeek Harness `0.2.1-rc.5`，不宣称兼容全部 DSH 版本。
 
 ---
 
@@ -108,8 +109,66 @@ export async function apply(ctx: Context): Promise<void> {
 | `priority` | number? | 默认 0，高者先跑 |
 | `timeoutMs` | number? | 默认总线配置（5s） |
 | `label` | string? | 设置页展示名（默认包名） |
+| `owner` | object? | 消费者自报来源：`packageName` / `packageVersion` / `handlerRef`；只用于排障，不是身份验证 |
+| `key` | string? | 同一次 `declare()`、同一事件内的唯一 key；长度有上限 |
+| `before` | string[]? | 本条目必须排在这些 key（同批次同事件）之前 |
+| `after` | string[]? | 本条目必须排在这些 key（同批次同事件）之后 |
 
 `declare(entries, options?)` 接受两种形式：`handler` 为**函数**（直接传）；或 `handler` 为**字符串**（需要 `options.baseUrl`，P7 动态 import）。任何一个条目校验失败，整批声明报错，不留半注册状态。
+
+### 4.1 owner：自报来源与信任边界
+
+运行时 `on()` 的 options 与声明式条目都接受可选的 `owner`：
+
+```ts
+const owner = {
+  packageName: 'my-plugin',      // 由消费者自行读取自身 package.json
+  packageVersion: '1.2.3',
+  handlerRef: './hooks/guard.js', // 包内相对路径
+}
+
+ctx.hooksBus.on('PreToolUse', handler, { owner })
+await ctx.hooksBus.declare([{ event: 'PreToolUse', handler: './hooks/guard.js', owner }], {
+  baseUrl: new URL('./', import.meta.url).href,
+})
+```
+
+规则：
+
+- `packageName` / `packageVersion` 是消费者**自报**值，总线不读取调用栈、不解析安装目录、不做任何验证。
+- `handlerRef` 由总线规范化：`./hooks/guard.js` 和 `hooks/guard.js` 都会显示为 `hooks/guard.js`；反斜杠统一为 `/`，内部 `./` 合并。
+- 绝对路径、Windows 盘符、UNC、URL，以及会逃出包外的 `..` 一律替换为 `external`；原始路径不会出现在 API、日志或设置页。缺失字段显示本地化 unknown。
+- 旧消费者不传 `owner` 仍然工作，既有字段不变；`state().subscriptions` 会返回 `owner: {}`。
+- `owner` 只用于排障可见性，**不构成安全身份背书**。不要基于它做权限判断；运行时 `on()` 也无法可靠识别真实调用包。
+
+### 4.2 before / after：仅限同一批次、同一事件
+
+```ts
+await ctx.hooksBus.declare([
+  {
+    event: 'PreToolUse',
+    key: 'audit',
+    before: ['guard'], // audit 必须排在 guard 前面
+    handler: './hooks/audit.js',
+  },
+  {
+    event: 'PreToolUse',
+    key: 'guard',
+    after: ['audit'], // guard 必须排在 audit 后面
+    handler: './hooks/guard.js',
+  },
+], { baseUrl })
+```
+
+规则：
+
+- `key` 只在**同一次 `declare()`、同一事件**内唯一；`before` / `after` 只能引用该批次该事件里的 key。
+- 重复 key、未知引用、跨事件引用、自环、多节点环都会让**整批**声明失败，不会留下半批订阅。
+- 稳定拓扑排序；DAG 约束与 priority 冲突时 DAG 获胜。没有 before/after 的旧批次仍按 priority 降序 + 声明顺序，不会因 M3 改变。
+- 暂停某节点不改变其余节点的合法顺序；DAG 只影响分发顺序，不改超时、异常隔离、Decision 折叠。
+- 运行时 `on()` 不支持也不受 key/before/after 影响，仍是 priority + 注册序。
+- 这不是全局依赖图：不跨批次、不跨插件、不等待未来注册的 key，也不是工作流引擎。
+- `owner` 仍是消费者自报信息；使用 before/after 不会获得额外的身份信任或安全背书。
 
 ## 5. 执行保障（你无需关心，但可以依赖）
 

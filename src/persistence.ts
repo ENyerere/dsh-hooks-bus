@@ -1,14 +1,18 @@
 /**
  * Durable state for dsh-hooks-bus: the global pause flag and the dispatch log,
  * stored through the `storageDomain` service in the plugin's own domain
- * (`dsh-hooks-bus`). When the service is absent, opening fails, or a write
- * fails, the bus degrades to in-memory behavior — persistence is best-effort
- * and never blocks a dispatch.
+ * (`dsh_hooks_bus`).
+ *
+ * Opening is deliberately split from service lookup: the service decides when a
+ * `storageDomain` facility exists (it waits for the late-activated service) and
+ * hands the facility here. `open()` therefore reports every failure to its
+ * caller instead of hiding it behind an `undefined` return; the service maps
+ * that failure to an `error` persistence status that the API and settings page
+ * show.
  *
  * @module dsh-hooks-bus/persistence
  */
 
-import type { Context } from 'cordis'
 import { z } from 'zod'
 
 import type { DispatchLogRecord, SubscriberOutcome } from './logger.ts'
@@ -17,6 +21,31 @@ import type { DispatchLogRecord, SubscriberOutcome } from './logger.ts'
 // Hyphens are rejected by dsh-storage-json's validateDescriptor (verified against the installed runtime).
 // Do not "fix" this back to the package name.
 export const DOMAIN_NAME = 'dsh_hooks_bus'
+
+/** Where the bus keeps its state. */
+export type PersistenceMode = 'memory' | 'persistent'
+
+/**
+ * Lifecycle of the durable state.
+ *
+ * - `initializing`: waiting for `storageDomain`, or an `open()` is in flight.
+ * - `ready`: the domain is open and writes go to disk.
+ * - `error`: a `storageDomain` facility exists but opening it failed.
+ * - `unavailable`: this deployment has no `storageDomain` service.
+ */
+export type PersistenceStatus =
+  | 'unavailable'
+  | 'initializing'
+  | 'ready'
+  | 'error'
+
+/** Public persistence descriptor exposed through `state().persistence`. */
+export interface PersistenceInfo {
+  mode: PersistenceMode
+  status: PersistenceStatus
+  /** Underlying failure summary; present only for `status: 'error'`. */
+  error?: string
+}
 
 const subscriberSchema = z.object({
   subscriptionId: z.number(),
@@ -37,7 +66,8 @@ const recordSchema = z.object({
   subscribers: z.array(subscriberSchema),
 })
 
-interface DomainLike {
+/** The subset of the host domain contract the bus relies on. */
+export interface DomainLike {
   global: {
     get(): { paused?: boolean }
     set(value: { paused: boolean }): Promise<void>
@@ -52,7 +82,8 @@ interface DomainLike {
   close(): Promise<void>
 }
 
-interface StorageDomainLike {
+/** The subset of the host `storageDomain` facility the bus relies on. */
+export interface StorageDomainLike {
   open(spec: unknown): Promise<DomainLike>
 }
 
@@ -66,39 +97,43 @@ export class PersistenceStore {
     this.logTable = domain.table('logs')
   }
 
+  /**
+   * Open the bus domain on an existing facility.
+   *
+   * @param facility - The host `storageDomain` service instance.
+   * @param capacity - Ring capacity used when evicting old records.
+   * @returns The open store.
+   * @throws When the domain cannot be opened or validated; the caller decides
+   *   whether that is fatal for dispatch (it never is) and reports it.
+   */
   static async open(
-    ctx: Context,
+    facility: StorageDomainLike,
     capacity: number,
-  ): Promise<PersistenceStore | undefined> {
-    const lookup = ctx as Context & { get: (name: string, strict?: boolean) => unknown }
-    const facility = lookup.get('storageDomain', false) as
-      | StorageDomainLike
-      | undefined
-    if (facility === undefined) {
-      return undefined
-    }
+  ): Promise<PersistenceStore> {
+    const domain = await facility.open({
+      name: DOMAIN_NAME,
+      version: 1,
+      layout: 'per-record',
+      global: {
+        schema: z.object({ paused: z.boolean() }),
+        initial: { paused: false },
+      },
+      tables: {
+        logs: { valueSchema: recordSchema },
+      },
+    })
     try {
-      const domain = await facility.open({
-        name: DOMAIN_NAME,
-        version: 1,
-        layout: 'per-record',
-        global: {
-          schema: z.object({ paused: z.boolean() }),
-          initial: { paused: false },
-        },
-        tables: {
-          logs: { valueSchema: recordSchema },
-        },
-      })
-      const store = new PersistenceStore(domain, capacity)
-      ctx.effect((): (() => void) => () => {
-        void domain.close()
-      })
-      return store
+      return new PersistenceStore(domain, capacity)
     } catch (error) {
-      ctx.logger.warn('[hooks-bus] persistence unavailable: %s', error)
-      return undefined
+      // A partially constructed store still owns the just-opened domain.
+      await domain.close().catch(() => {})
+      throw error
     }
+  }
+
+  /** Close the underlying domain; safe to call more than once. */
+  async close(): Promise<void> {
+    await this.domain.close()
   }
 
   paused(): boolean {

@@ -35,8 +35,18 @@ window.__ModuleLoader__.load({
       observe: 'observe',
       subscribersTitle: 'Subscribers',
       subscribersEmpty: 'No subscriptions yet. Other plugins subscribe via ctx.hooksBus.on(...) or a declarative manifest.',
+      subscribersTrustNote:
+        'Declared package, version and handler reference are self-reported by the consumer. The host has not verified them.',
       colId: 'ID',
-      colSource: 'Source',
+      colSource: 'Source type',
+      colLabel: 'Label',
+      colPackage: 'Declared package (self-reported)',
+      colVersion: 'Version',
+      colHandlerRef: 'Handler ref',
+      sourceRuntime: 'runtime',
+      sourceDeclarative: 'declarative',
+      unknown: 'unknown',
+      externalHandlerRef: 'external path (hidden)',
       colPriority: 'Priority',
       colTimeout: 'Timeout',
       colStatus: 'Status',
@@ -52,6 +62,20 @@ window.__ModuleLoader__.load({
       loading: 'Loading…',
       stateError: 'Cannot read bus state',
       pauseLabel: 'Master switch (off pauses the whole bus)',
+      persistenceTitle: 'Persistence',
+      persistenceModeLabel: 'Mode',
+      persistenceModeMemory: 'memory only',
+      persistenceModePersistent: 'persistent',
+      persistenceUnavailable:
+        'This deployment provides no storage service. Logs and pause state live in memory only.',
+      persistenceInitializing:
+        'Waiting for the storage service to activate; state is in memory until the domain opens.',
+      persistenceReady:
+        'Domain dsh_hooks_bus is open. Logs and the pause flag are written to disk.',
+      persistenceError:
+        'Storage failed to open. The bus keeps dispatching from memory; nothing is being persisted.',
+      persistenceUnknown: 'Unknown persistence state',
+      persistenceErrorLabel: 'Error',
     }
 
     const zh = {
@@ -70,8 +94,18 @@ window.__ModuleLoader__.load({
       observe: '观察',
       subscribersTitle: '订阅者',
       subscribersEmpty: '暂无订阅。其他插件可通过 ctx.hooksBus.on(...) 或声明式清单订阅。',
+      subscribersTrustNote:
+        '声明包、版本与 handler 路径均由消费者自报，宿主未做验证。',
       colId: 'ID',
-      colSource: '来源',
+      colSource: '来源类型',
+      colLabel: '标签',
+      colPackage: '声明包（自报）',
+      colVersion: '版本',
+      colHandlerRef: 'Handler 相对路径',
+      sourceRuntime: '运行时',
+      sourceDeclarative: '声明式',
+      unknown: '未知',
+      externalHandlerRef: '包外路径（已隐藏）',
       colPriority: '优先级',
       colTimeout: '超时',
       colStatus: '状态',
@@ -87,6 +121,20 @@ window.__ModuleLoader__.load({
       loading: '加载中…',
       stateError: '无法读取总线状态',
       pauseLabel: '总线总开关（关闭即全局暂停）',
+      persistenceTitle: '持久化状态',
+      persistenceModeLabel: '模式',
+      persistenceModeMemory: '仅内存',
+      persistenceModePersistent: '持久化',
+      persistenceUnavailable:
+        '当前部署未提供存储服务。日志与暂停状态仅保存在内存中。',
+      persistenceInitializing:
+        '正在等待存储服务激活；在域打开前状态仅保存在内存中。',
+      persistenceReady:
+        '域 dsh_hooks_bus 已打开。日志与暂停标记会写入磁盘。',
+      persistenceError:
+        '存储打开失败。总线继续从内存分发，当前不会持久化任何状态。',
+      persistenceUnknown: '未知的持久化状态',
+      persistenceErrorLabel: '错误',
     }
 
     const css = {
@@ -124,6 +172,14 @@ window.__ModuleLoader__.load({
         width: '100%',
         borderCollapse: 'collapse',
         fontSize: '12px',
+      },
+      tableScroll: {
+        maxWidth: '100%',
+        overflowX: 'auto',
+      },
+      naturalWidthTable: {
+        width: 'max-content',
+        minWidth: '100%',
       },
       th: {
         textAlign: 'left',
@@ -301,6 +357,23 @@ window.__ModuleLoader__.load({
 
           const events = state.events ?? []
           const subscriptions = state.subscriptions ?? []
+          const persistence = state.persistence ?? {
+            mode: 'memory',
+            status: 'unavailable',
+          }
+          const persistenceStatusText =
+            {
+              unavailable: t('persistenceUnavailable'),
+              initializing: t('persistenceInitializing'),
+              ready: t('persistenceReady'),
+              error: t('persistenceError'),
+            }[persistence.status] ?? t('persistenceUnknown')
+          const persistenceBadgeColor =
+            persistence.status === 'ready'
+              ? 'var(--dsw-alias-brand-primary)'
+              : persistence.status === 'error'
+                ? 'var(--dsw-alias-state-error-primary)'
+                : 'var(--dsw-alias-state-idle-primary)'
           const logs = (state.logs ?? []).filter((record) => {
             if (eventFilter !== 'all' && record.event !== eventFilter) {
               return false
@@ -313,6 +386,21 @@ window.__ModuleLoader__.load({
             }
             return true
           })
+
+          const sourceLabel = (source) =>
+            source === 'declarative'
+              ? t('sourceDeclarative')
+              : source === 'runtime'
+                ? t('sourceRuntime')
+                : t('unknown')
+
+          const handlerRefLabel = (owner) => {
+            const ref = owner?.handlerRef
+            if (ref === undefined) {
+              return t('unknown')
+            }
+            return ref === 'external' ? t('externalHandlerRef') : ref
+          }
 
           const togglePause = () => {
             const next = !state.paused
@@ -356,46 +444,74 @@ window.__ModuleLoader__.load({
             h(
               'section',
               { style: css.card },
+              h(
+                'div',
+                { style: css.row },
+                h('h3', { style: css.cardTitle }, t('persistenceTitle')),
+                Badge({
+                  text:
+                    persistence.mode === 'persistent'
+                      ? t('persistenceModePersistent')
+                      : t('persistenceModeMemory'),
+                  color: persistenceBadgeColor,
+                }),
+              ),
+              h('p', { style: css.subtitle }, persistenceStatusText),
+              persistence.error === undefined
+                ? null
+                : h(
+                    'p',
+                    { style: css.error },
+                    `${t('persistenceErrorLabel')}: ${persistence.error}`,
+                  ),
+            ),
+            h(
+              'section',
+              { style: css.card },
               h('h3', { style: css.cardTitle }, t('eventsTitle')),
               h(
-                'table',
-                { style: css.table },
+                'div',
+                { style: css.tableScroll },
                 h(
-                  'thead',
-                  null,
+                  'table',
+                  { style: { ...css.table, ...css.naturalWidthTable } },
                   h(
-                    'tr',
+                    'thead',
                     null,
-                    h('th', { style: css.th }, t('colEvent')),
-                    h('th', { style: css.th }, t('colOfficial')),
-                    h('th', { style: css.th }, t('colInterceptable')),
-                    h('th', { style: css.th }, t('colSubscribers')),
-                    h('th', { style: css.th }, t('colTriggers')),
-                    h('th', { style: css.th }, t('colDuration')),
-                  ),
-                ),
-                h(
-                  'tbody',
-                  null,
-                  events.map((event) =>
                     h(
                       'tr',
-                      { key: event.name },
-                      h('td', { style: { ...css.td, ...css.mono } }, event.name),
-                      h('td', { style: { ...css.td, ...css.mono } }, event.official),
+                      null,
+                      h('th', { style: css.th }, t('colEvent')),
+                      h('th', { style: css.th }, t('colOfficial')),
+                      h('th', { style: css.th }, t('colInterceptable')),
+                      h('th', { style: css.th }, t('colSubscribers')),
+                      h('th', { style: css.th }, t('colTriggers')),
+                      h('th', { style: css.th }, t('colDuration')),
+                    ),
+                  ),
+                  h(
+                    'tbody',
+                    null,
+                    events.map((event) =>
                       h(
-                        'td',
-                        { style: css.td },
-                        Badge({
-                          text: event.interceptable ? t('intercept') : t('observe'),
-                          color: event.interceptable
-                            ? 'var(--dsw-alias-state-warn-primary)'
-                            : 'var(--dsw-alias-state-idle-primary)',
-                        }),
+                        'tr',
+                        { key: event.name },
+                        h('td', { style: { ...css.td, ...css.mono } }, event.name),
+                        h('td', { style: { ...css.td, ...css.mono } }, event.official),
+                        h(
+                          'td',
+                          { style: css.td },
+                          Badge({
+                            text: event.interceptable ? t('intercept') : t('observe'),
+                            color: event.interceptable
+                              ? 'var(--dsw-alias-state-warn-primary)'
+                              : 'var(--dsw-alias-state-idle-primary)',
+                          }),
+                        ),
+                        h('td', { style: css.td }, `${event.activeSubscribers}/${event.subscribers}`),
+                        h('td', { style: css.td }, String(event.stats?.count ?? 0)),
+                        h('td', { style: css.td }, `${event.stats?.totalDurationMs ?? 0}ms`),
                       ),
-                      h('td', { style: css.td }, `${event.activeSubscribers}/${event.subscribers}`),
-                      h('td', { style: css.td }, String(event.stats?.count ?? 0)),
-                      h('td', { style: css.td }, `${event.stats?.totalDurationMs ?? 0}ms`),
                     ),
                   ),
                 ),
@@ -405,48 +521,73 @@ window.__ModuleLoader__.load({
               'section',
               { style: css.card },
               h('h3', { style: css.cardTitle }, t('subscribersTitle')),
+              h('p', { style: css.subtitle }, t('subscribersTrustNote')),
               subscriptions.length === 0
                 ? h('p', { style: css.subtitle }, t('subscribersEmpty'))
                 : h(
-                    'table',
-                    { style: css.table },
+                    'div',
+                    { style: css.tableScroll },
                     h(
-                      'thead',
-                      null,
+                      'table',
+                      { style: { ...css.table, ...css.naturalWidthTable } },
                       h(
-                        'tr',
+                        'thead',
                         null,
-                        h('th', { style: css.th }, t('colId')),
-                        h('th', { style: css.th }, t('colEvent')),
-                        h('th', { style: css.th }, t('colSource')),
-                        h('th', { style: css.th }, t('colPriority')),
-                        h('th', { style: css.th }, t('colTimeout')),
-                        h('th', { style: css.th }, t('colStatus')),
-                      ),
-                    ),
-                    h(
-                      'tbody',
-                      null,
-                      subscriptions.map((entry) =>
                         h(
                           'tr',
-                          { key: entry.id },
-                          h('td', { style: { ...css.td, ...css.mono } }, String(entry.id)),
-                          h('td', { style: { ...css.td, ...css.mono } }, entry.event),
-                          h('td', { style: css.td }, entry.label),
-                          h('td', { style: css.td }, String(entry.priority)),
-                          h('td', { style: css.td }, `${entry.timeoutMs}ms`),
+                          null,
+                          h('th', { style: css.th }, t('colId')),
+                          h('th', { style: css.th }, t('colEvent')),
+                          h('th', { style: css.th }, t('colSource')),
+                          h('th', { style: css.th }, t('colLabel')),
+                          h('th', { style: css.th }, t('colPackage')),
+                          h('th', { style: css.th }, t('colVersion')),
+                          h('th', { style: css.th }, t('colHandlerRef')),
+                          h('th', { style: css.th }, t('colPriority')),
+                          h('th', { style: css.th }, t('colTimeout')),
+                          h('th', { style: css.th }, t('colStatus')),
+                        ),
+                      ),
+                      h(
+                        'tbody',
+                        null,
+                        subscriptions.map((entry) =>
                           h(
-                            'td',
-                            { style: css.td },
+                            'tr',
+                            { key: entry.id },
+                            h('td', { style: { ...css.td, ...css.mono } }, String(entry.id)),
+                            h('td', { style: { ...css.td, ...css.mono } }, entry.event),
+                            h('td', { style: css.td }, sourceLabel(entry.source)),
+                            h('td', { style: css.td }, entry.label ?? t('unknown')),
                             h(
-                              'button',
-                              {
-                                type: 'button',
-                                style: css.button,
-                                onClick: () => toggleSubscription(entry.id, !entry.paused),
-                              },
-                              entry.paused ? t('pausedAction') : t('runningAction'),
+                              'td',
+                              { style: css.td },
+                              entry.owner?.packageName ?? t('unknown'),
+                            ),
+                            h(
+                              'td',
+                              { style: css.td },
+                              entry.owner?.packageVersion ?? t('unknown'),
+                            ),
+                            h(
+                              'td',
+                              { style: { ...css.td, ...css.mono } },
+                              handlerRefLabel(entry.owner),
+                            ),
+                            h('td', { style: css.td }, String(entry.priority)),
+                            h('td', { style: css.td }, `${entry.timeoutMs}ms`),
+                            h(
+                              'td',
+                              { style: css.td },
+                              h(
+                                'button',
+                                {
+                                  type: 'button',
+                                  style: css.button,
+                                  onClick: () => toggleSubscription(entry.id, !entry.paused),
+                                },
+                                entry.paused ? t('pausedAction') : t('runningAction'),
+                              ),
                             ),
                           ),
                         ),
@@ -481,35 +622,39 @@ window.__ModuleLoader__.load({
                 }),
               ),
               h(
-                'table',
-                { style: css.table },
+                'div',
+                { style: css.tableScroll },
                 h(
-                  'thead',
-                  null,
+                  'table',
+                  { style: { ...css.table, ...css.naturalWidthTable } },
                   h(
-                    'tr',
+                    'thead',
                     null,
-                    h('th', { style: css.th }, t('colSeq')),
-                    h('th', { style: css.th }, t('colTime')),
-                    h('th', { style: css.th }, t('colEvent')),
-                    h('th', { style: css.th }, t('colSession')),
-                    h('th', { style: css.th }, t('colDuration')),
-                    h('th', { style: css.th }, t('colDecision')),
-                  ),
-                ),
-                h(
-                  'tbody',
-                  null,
-                  logs.slice(0, 100).map((record) =>
                     h(
                       'tr',
-                      { key: record.seq },
-                      h('td', { style: { ...css.td, ...css.mono } }, String(record.seq)),
-                      h('td', { style: css.td }, new Date(record.time).toLocaleTimeString()),
-                      h('td', { style: { ...css.td, ...css.mono } }, record.event),
-                      h('td', { style: { ...css.td, ...css.mono } }, record.sessionId ?? '-'),
-                      h('td', { style: css.td }, `${record.durationMs}ms`),
-                      h('td', { style: { ...css.td, ...css.mono } }, record.decision),
+                      null,
+                      h('th', { style: css.th }, t('colSeq')),
+                      h('th', { style: css.th }, t('colTime')),
+                      h('th', { style: css.th }, t('colEvent')),
+                      h('th', { style: css.th }, t('colSession')),
+                      h('th', { style: css.th }, t('colDuration')),
+                      h('th', { style: css.th }, t('colDecision')),
+                    ),
+                  ),
+                  h(
+                    'tbody',
+                    null,
+                    logs.slice(0, 100).map((record) =>
+                      h(
+                        'tr',
+                        { key: record.seq },
+                        h('td', { style: { ...css.td, ...css.mono } }, String(record.seq)),
+                        h('td', { style: css.td }, new Date(record.time).toLocaleTimeString()),
+                        h('td', { style: { ...css.td, ...css.mono } }, record.event),
+                        h('td', { style: { ...css.td, ...css.mono } }, record.sessionId ?? '-'),
+                        h('td', { style: css.td }, `${record.durationMs}ms`),
+                        h('td', { style: { ...css.td, ...css.mono } }, record.decision),
+                      ),
                     ),
                   ),
                 ),
